@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MeshCore Bot - Solar & Weather Edition
+MeshCore Bot
 Author: Marcin SP4IM
 License: MIT
 
@@ -8,7 +8,7 @@ Description:
     A robust auto-responder bot for MeshCore/Meshtastic networks.
     Features:
     - Auto-replies to specific keywords (weather, solar, ping).
-    - Fetches solar propagation data from HamQSL with astronomical Day/Night calculation.Source: https://www.hamqsl.com/solarxml.php
+    - Fetches solar propagation data from HamQSL with robust XML parsing.
     - Reads local weather data from a file.
     - Includes a hardware Watchdog to handle USB disconnects in VM environments.
 """
@@ -36,10 +36,10 @@ except ImportError:
 #               CONFIGURATION
 # ==========================================
 CONFIG = {
-    # Serial port. Using a stable symlink (via UDEV) is recommended for VMs.
+    # Serial port. Using a stable symlink (via UDEV) is recommended for Proxmox/VMs.
     "serial_port": "/dev/mesh_radio",
     
-    # MeshCore channel index to listen on (e.g., 1 for a test channel)
+    # MeshCore channel index to listen on (e.g., 1 for a private/test channel)
     "channel_index": 1,
     
     # Minimum seconds between replies to the same sender (Rate Limiting)
@@ -69,7 +69,7 @@ CONFIG = {
     # Keywords that trigger the bot
     "triggers": {
         "basic": {"test", "ping"},
-        "weather": {"pogoda", "weather"},
+        "weather": {"pogoda", "weather", "temp"},
         "solar": {"solar", "warunki", "propa", "dx"}
     }
 }
@@ -116,7 +116,6 @@ class SunCalc:
             return sunrise_utc <= hour_utc <= sunset_utc
         except Exception as e:
             # Fallback in case of math domain error (e.g. polar regions)
-            logger.warning(f"SunCalc error: {e}. Using fallback 06-18h.")
             h = datetime.now().hour
             return 6 <= h < 18
 
@@ -128,18 +127,34 @@ class SolarModule:
     def get_info() -> str:
         url = CONFIG["solar"]["url"]
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'MeshCoreBot/1.0'})
-            with urllib.request.urlopen(req, timeout=5.0) as response:
+            # Use a standard browser User-Agent to avoid blocking
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10.0) as response:
                 xml_data = response.read()
 
             root = ET.fromstring(xml_data)
-            data = root.find('solardata')
-            if data is None:
-                return "ERR: Solar XML invalid"
-
-            sfi = data.findtext('flux')
-            k_idx = data.findtext('k')
             
+            # HamQSL XML structure handling
+            # Usually <solar><solardata>...</solardata></solar>
+            data = root.find('solardata')
+            
+            # Fallback: sometimes the root IS solardata
+            if data is None and root.tag == 'solardata':
+                data = root
+                
+            if data is None:
+                return "ERR: XML structure invalid"
+
+            # Parse numeric values with CORRECT tag names for HamQSL
+            # Primary: 'solarflux', 'kindex'
+            # Fallback: 'flux', 'k' (old format)
+            sfi = data.findtext('solarflux') or data.findtext('flux')
+            k_idx = data.findtext('kindex') or data.findtext('k')
+            
+            # Fallback to "?" if tag is missing or empty
+            if not sfi: sfi = "?"
+            if not k_idx: k_idx = "?"
+
             # Determine Day/Night mode for the user's location
             lat = CONFIG["location"]["lat"]
             lon = CONFIG["location"]["lon"]
@@ -151,7 +166,9 @@ class SolarModule:
             # Parse band conditions
             conds_str = ""
             calc = data.find('calculatedconditions')
-            if calc:
+            
+            # Check explicitly if 'calc' exists to avoid DeprecationWarning
+            if calc is not None:
                 bands = calc.findall('band')
                 # Map conditions to short codes: Poor->P, Fair->F, Good->G
                 short_map = {"Poor": "P", "Fair": "F", "Good": "G"}
@@ -254,7 +271,7 @@ class MeshBot:
         self.first_msg_processed = False
 
     async def start(self):
-        logger.info(f"--- MeshCore Bot Started ---")
+        logger.info(f"--- MeshCore Bot Started (Solar/Weather Edition v5.6) ---")
         
         # Clean stale lock files
         if os.path.exists("/tmp/meshcore.lock"):
