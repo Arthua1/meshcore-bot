@@ -69,7 +69,7 @@ CONFIG = {
     # Keywords that trigger the bot
     "triggers": {
         "basic": {"test", "ping"},
-        "weather": {"pogoda", "weather", "temp"},
+        "weather": {"pogoda", "weather"},
         "solar": {"solar", "warunki", "propa", "dx"}
     }
 }
