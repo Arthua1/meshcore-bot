@@ -7,7 +7,7 @@ License: MIT
 Description:
     A robust auto-responder bot for MeshCore/Meshtastic networks.
     Features:
-    - Auto-replies to specific keywords (weather, solar, ping).
+    - Auto-replies to specific keywords (weather, solar, ping, infobot, help).
     - Fetches solar propagation data from HamQSL with robust XML parsing.
     - Reads local weather data from a file.
     - Includes a hardware Watchdog to handle USB disconnects in VM environments.
@@ -70,7 +70,9 @@ CONFIG = {
     "triggers": {
         "basic": {"test", "ping"},
         "weather": {"pogoda", "weather"},
-        "solar": {"solar", "warunki", "propa", "dx"}
+        "solar": {"solar", "warunki", "propa", "dx"},
+        "info": {"infobot"},
+        "help": {"help", "pomoc"}
     }
 }
 
@@ -271,7 +273,7 @@ class MeshBot:
         self.first_msg_processed = False
 
     async def start(self):
-        logger.info(f"--- MeshCore Bot Started (Solar/Weather Edition v5.6) ---")
+        logger.info(f"--- MeshCore Bot Started (Solar/Weather Edition v5.8) ---")
         
         # Clean stale lock files
         if os.path.exists("/tmp/meshcore.lock"):
@@ -397,6 +399,14 @@ class MeshBot:
             loop = asyncio.get_running_loop()
             info = await loop.run_in_executor(None, SolarModule.get_info)
             reply_text = f"ACK {info}"
+
+        elif matched_trigger == "info":
+            # Link to GitHub repo
+            reply_text = "ACK Repo: https://github.com/Arthua1/meshcore-bot"
+
+        elif matched_trigger == "help":
+            # Short help text
+            reply_text = "ACK CMDs: test/ping, pogoda/weather, solar/warunki, infobot (repo)"
             
         else:
             # Basic reply (test/ping)
