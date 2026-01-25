@@ -1,4 +1,4 @@
-# MeshCore Bot - Proxmox//VMware/RPi Edition
+# MeshCore Bot - VM/RPi Edition
 
 A robust, Python-based auto-responder and information bot for MeshCore networks (Meshtastic companion radios). Designed for stability in virtualized environments (Proxmox, VMware) and reliable 24/7 operation.
 
