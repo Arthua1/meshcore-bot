@@ -2,15 +2,16 @@
 
 A robust, Python-based auto-responder and information bot for MeshCore networks (Meshtastic companion radios). Designed for stability in virtualized environments (Proxmox, VMware) and reliable 24/7 operation.
 
-MeshCore-Bot works in public channel number 1 - #testy, you can change it in config.
+MeshCore-Bot operates on a configurable channel (default: public channel 1 - `#testy`).
 
 ## Key Features
 
-*   Solar & Propagation Data:** Fetches real-time solar indices (SFI, A, K) from HamQSL. Uses a built-in **astronomical algorithm** (NOAA-based) to automatically switch between Day/Night propagation predictions based on your precise GPS location – no internet time services or heavy libraries required.
-*   Weather Integration:** Reads local weather data from a file (compatible with Netatmo-API fetchers).
-*   VM Stability:** Includes a dedicated "Watchdog" loop that aggressively monitors the USB serial connection. If the radio hangs or USB disconnects (common in VM pass-through), the bot self-terminates to trigger a clean systemd restart.
-*   Anti-Spam & Deduplication:** Filters out old buffered messages after a reboot and prevents reply loops.
-*   Zero-Dependency Logic:** Solar calculations and watchdog logic use standard Python libraries.
+*   **Solar & Propagation Data:** Fetches real-time solar indices (SFI, A, K) from HamQSL. Uses a built-in **astronomical algorithm** (NOAA-based) to automatically switch between Day/Night propagation predictions based on your precise GPS location – no heavy libraries required.
+*   **Weather Forecast (New):** Fetches next-day weather forecast from **Open-Meteo** (no API key needed). Smartly formats messages to fit within Meshtastic/LoRa character limits (e.g., dynamically removing units if the message is too long).
+*   **Local Weather:** Reads current local weather data from a file (compatible with Netatmo-API fetchers).
+*   **Multi-language Support:** Easily switch bot responses between Polish (`pl`) and English (`en`) via configuration.
+*   **VM Stability:** Includes a dedicated "Watchdog" loop that aggressively monitors the USB serial connection. If the radio hangs or USB disconnects (common in VM pass-through), the bot self-terminates to trigger a clean systemd restart.
+*   **Anti-Spam & Deduplication:** Filters out old buffered messages after a reboot and prevents reply loops.
 
 ## Commands
 
@@ -18,8 +19,12 @@ Users on the mesh network can send messages to the channel where the bot is list
 
 *   `test`, `ping` - Returns a simple ACK with timestamp.
 *   `weather`, `pogoda` - Returns current local weather (Temp, Humidity, Pressure, Wind).
+*   `weather_tomorrow`, `pogoda_jutro` - Returns tomorrow's forecast (Temp Min/Max, Wind, Rain).
+    *   *Example reply:* `ACK 🌤️ Jutro: Przew. słonecznie 12–18°C NW15km/h`
 *   `solar`, `propa` - Returns solar indices and band conditions (Day/Night auto-detected).
     *   *Example reply:* `ACK SFI=168 K=2 [Day] 80-40:P 20:G 15:G 10:F`
+*   `infobot` - Returns a link to the bot's repository.
+*   `help`, `pomoc` - Returns a concise list of available commands.
 
 ## Installation
 
@@ -30,6 +35,7 @@ Users on the mesh network can send messages to the channel where the bot is list
     ```
 
 2.  **Install dependencies:**
+    The bot logic uses standard Python libraries. You only need the meshcore library:
     ```bash
     pip3 install meshcore
     ```
@@ -37,7 +43,8 @@ Users on the mesh network can send messages to the channel where the bot is list
 3.  **Configure:**
     Edit the `CONFIG` dictionary in `meshbot.py`:
     *   Set your serial port (e.g., `/dev/ttyACM0` or `/dev/mesh_radio`).
-    *   Set your GPS coordinates for accurate Day/Night solar calculations.
+    *   **Crucial:** Set your GPS coordinates (`lat`, `lon`) for accurate Day/Night solar calculations and weather forecasts.
+    *   Choose your language (`"lang": "pl"` or `"en"`).
     *   Adjust triggers and file paths.
 
 4.  **Run as a Systemd Service (Recommended):**
@@ -50,3 +57,4 @@ For virtual machines, it is highly recommended to use a UDEV rule to assign a pe
 Create `/etc/udev/rules.d/99-mesh.rules`:
 ```bash
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="mesh_radio"
+```
