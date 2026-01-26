@@ -8,7 +8,7 @@ MeshCore-Bot operates on a configurable channel (default: public channel 1 - `#t
 
 *   **Solar & Propagation Data:** Fetches real-time solar indices (SFI, A, K) from HamQSL. Uses a built-in **astronomical algorithm** (NOAA-based) to automatically switch between Day/Night propagation predictions based on your precise GPS location – no heavy libraries required.
 *   **Weather Forecast (New):** Fetches next-day weather forecast from **Open-Meteo** (no API key needed). Smartly formats messages to fit within Meshtastic/LoRa character limits (e.g., dynamically removing units if the message is too long).
-*   **Local Weather:** Reads current local weather data from a file (compatible with Netatmo-API fetchers).
+*   **Local Weather:** Reads current local weather data from a file.
 *   **Multi-language Support:** Easily switch bot responses between Polish (`pl`) and English (`en`) via configuration.
 *   **VM Stability:** Includes a dedicated "Watchdog" loop that aggressively monitors the USB serial connection. If the radio hangs or USB disconnects (common in VM pass-through), the bot self-terminates to trigger a clean systemd restart.
 *   **Anti-Spam & Deduplication:** Filters out old buffered messages after a reboot and prevents reply loops.
