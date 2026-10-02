@@ -1,0 +1,20 @@
+{
+  "serial_port": "/dev/mesh_radio",
+  "channel": {
+    "index": 1,
+    "name": "testy",
+    "scope": "pl-podlasie"
+  },
+  "location": {
+    "lat": 53.1325,
+    "lon": 23.1688,
+    "elevation_m": 150.0,
+    "timezone": "Europe/Warsaw",
+    "label": "PL"
+  },
+  "lang": "pl",
+  "show_signal": true,
+  "weather": {
+    "file_path": "/tmp/netatmo_data.py"
+  }
+}

@@ -1,0 +1,17 @@
+[Unit]
+Description=MeshCore Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=meshcore
+Group=meshcore
+WorkingDirectory=/opt/meshcore-bot
+ExecStart=/opt/meshcore-bot/venv/bin/python /opt/meshcore-bot/meshbot.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
