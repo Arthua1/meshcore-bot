@@ -54,6 +54,7 @@ CONFIG = {
     "reply_interval": 2.0,
     "dedup_ttl": 300.0,
     "keep_alive_interval": 60.0,
+    "show_signal": True,
     "command_timeout": 12.0,
     "message_queue_size": 100,
     "location": {
@@ -61,6 +62,7 @@ CONFIG = {
         "lon": 23.1688,
         "elevation_m": 150.0,
         "timezone": "Europe/Warsaw",
+        "label": "PL",
     },
     "lang": "pl",
     "weather": {
@@ -72,11 +74,13 @@ CONFIG = {
         "enabled": True,
         "url": "https://www.hamqsl.com/solarxml.php",
         "timeout": 8.0,
+        "cache_seconds": 15 * 60,
     },
     "forecast": {
         "enabled": True,
         "url": "https://api.open-meteo.com/v1/forecast",
         "timeout": 8.0,
+        "cache_seconds": 30 * 60,
     },
     "iss": {
         "enabled": True,
@@ -105,6 +109,31 @@ CONFIG = {
     },
 }
 
+
+
+def _merge_config(base: dict[str, Any], override: dict[str, Any]) -> None:
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge_config(base[key], value)
+        else:
+            base[key] = value
+
+
+def load_config_file() -> Optional[Path]:
+    path = Path(
+        os.environ.get("MESHBOT_CONFIG")
+        or Path(__file__).resolve().with_name("config.json")
+    )
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as handle:
+        override = json.load(handle)
+    if not isinstance(override, dict):
+        raise ValueError(f"{path}: top-level JSON value must be an object")
+    _merge_config(CONFIG, override)
+    return path
+
+
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
@@ -126,6 +155,12 @@ LANG_MAP = {
         "w_file_missing": "ERR: Brak pliku pogody",
         "w_file_stale": "ERR: Nieaktualne dane pogody",
         "w_data_err": "ERR: Bledne dane pogody",
+        "wind": "Wiatr",
+        "gust": "poryw",
+        "iss_no_tle": "ISS ERR: brak danych orbitalnych",
+        "iss_pos_err": "ISS ERR: obliczenie pozycji",
+        "iss_pass_err": "ISS ERR: obliczenie przelotu",
+        "iss_no_pass": "ISS: brak przelotu >={threshold:.0f}deg w {hours}h",
     },
     "en": {
         "tomorrow": "Tomorrow",
@@ -140,6 +175,12 @@ LANG_MAP = {
         "w_file_missing": "ERR: Weather file missing",
         "w_file_stale": "ERR: Weather data stale",
         "w_data_err": "ERR: Weather data invalid",
+        "wind": "Wind",
+        "gust": "gust",
+        "iss_no_tle": "ISS ERR: no orbital data",
+        "iss_pos_err": "ISS ERR: position calculation",
+        "iss_pass_err": "ISS ERR: pass calculation",
+        "iss_no_pass": "ISS: no pass >={threshold:.0f}deg in {hours}h",
     },
 }
 
@@ -167,7 +208,7 @@ def fetch_bytes(url: str, timeout: float, accept: str) -> tuple[bytes, Any]:
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "MeshCoreBot/6.0 SP4IM",
+            "User-Agent": "MeshCoreBot/6.1 SP4IM",
             "Accept": accept,
         },
     )
@@ -201,41 +242,54 @@ class SunCalc:
 
 
 class SolarModule:
-    @staticmethod
-    def get_info() -> str:
-        try:
-            xml_data, _ = fetch_bytes(
-                CONFIG["solar"]["url"],
-                float(CONFIG["solar"]["timeout"]),
-                "application/xml,text/xml",
-            )
-            root = ET.fromstring(xml_data)
-            data = root.find("solardata")
-            if data is None and root.tag == "solardata":
-                data = root
-            if data is None:
-                raise ValueError("Missing solardata")
+    _cache: Optional[tuple[str, str, dict[str, list[str]]]] = None
+    _cache_time = 0.0
 
-            sfi = data.findtext("solarflux") or data.findtext("flux") or "?"
-            k_idx = data.findtext("kindex") or data.findtext("k") or "?"
+    @classmethod
+    def _fetch(cls) -> tuple[str, str, dict[str, list[str]]]:
+        ttl = float(CONFIG["solar"].get("cache_seconds", 0))
+        if cls._cache is not None and time.monotonic() - cls._cache_time < ttl:
+            return cls._cache
+
+        xml_data, _ = fetch_bytes(
+            CONFIG["solar"]["url"],
+            float(CONFIG["solar"]["timeout"]),
+            "application/xml,text/xml",
+        )
+        root = ET.fromstring(xml_data)
+        data = root.find("solardata")
+        if data is None and root.tag == "solardata":
+            data = root
+        if data is None:
+            raise ValueError("Missing solardata")
+
+        sfi = (data.findtext("solarflux") or data.findtext("flux") or "?").strip()
+        k_idx = (data.findtext("kindex") or data.findtext("k") or "?").strip()
+        conditions: dict[str, list[str]] = {"day": [], "night": []}
+        calculated = data.find("calculatedconditions")
+        if calculated is not None:
+            short = {"Poor": "P", "Fair": "F", "Good": "G"}
+            for band in calculated.findall("band"):
+                period = band.get("time")
+                if period not in conditions:
+                    continue
+                name = (band.get("name") or "?").replace("m", "")
+                value = (band.text or "?").strip()
+                conditions[period].append(f"{name}:{short.get(value, value[:1])}")
+
+        cls._cache = (sfi, k_idx, conditions)
+        cls._cache_time = time.monotonic()
+        return cls._cache
+
+    @classmethod
+    def get_info(cls) -> str:
+        try:
+            sfi, k_idx, conditions = cls._fetch()
             lat = float(CONFIG["location"]["lat"])
             lon = float(CONFIG["location"]["lon"])
             is_day = SunCalc.is_daytime(lat, lon)
             mode = L("solar_day") if is_day else L("solar_night")
-            xml_time = "day" if is_day else "night"
-
-            conditions = []
-            calculated = data.find("calculatedconditions")
-            if calculated is not None:
-                short = {"Poor": "P", "Fair": "F", "Good": "G"}
-                for band in calculated.findall("band"):
-                    if band.get("time") != xml_time:
-                        continue
-                    name = (band.get("name") or "?").replace("m", "")
-                    value = (band.text or "?").strip()
-                    conditions.append(f"{name}:{short.get(value, value[:1])}")
-
-            suffix = " ".join(conditions)
+            suffix = " ".join(conditions["day" if is_day else "night"])
             return f"SFI={sfi} K={k_idx} [{mode}] {suffix}".strip()
         except Exception:
             logger.exception("Solar fetch failed")
@@ -279,7 +333,7 @@ class WeatherModule:
             wind_gust = data.get("wind_gust", "?")
             return (
                 f"T={temp}C RH={humidity}% P={pressure}hPa "
-                f"Wiatr={wind_speed}km/h {wind_dir} poryw={wind_gust}km/h"
+                f"{L('wind')}={wind_speed}km/h {wind_dir} {L('gust')}={wind_gust}km/h"
             )
         except Exception:
             logger.exception("Weather parsing failed")
@@ -357,8 +411,17 @@ class WXForecast:
         ]
         return directions[int((degrees % 360) / 22.5 + 0.5) % 16]
 
+    _cache: dict[tuple[Any, ...], tuple[float, str]] = {}
+
     @classmethod
     def get_tomorrow(cls, lat: float, lon: float, lang: str) -> str:
+        today = datetime.now(ZoneInfo(CONFIG["location"]["timezone"])).date()
+        key = (today, lat, lon, lang)
+        cached = cls._cache.get(key)
+        ttl = float(CONFIG["forecast"].get("cache_seconds", 0))
+        if cached is not None and time.monotonic() - cached[0] < ttl:
+            return cached[1]
+
         params = {
             "latitude": lat,
             "longitude": lon,
@@ -411,7 +474,9 @@ class WXForecast:
                 )
             if precipitation is not None:
                 parts.append(f"{float(precipitation):g}mm")
-            return " ".join(parts)
+            result = " ".join(parts)
+            cls._cache = {key: (time.monotonic(), result)}
+            return result
         except Exception:
             logger.exception("Forecast fetch failed")
             return L("wx_err")
@@ -553,13 +618,13 @@ class ISSModule:
 
     async def get_position(self) -> str:
         if not await self.refresh_if_needed():
-            return "ISS ERR: brak danych orbitalnych"
+            return L("iss_no_tle")
         async with self._calculation_lock:
             try:
                 return await asyncio.to_thread(self._position)
             except Exception:
                 logger.exception("ISS position calculation failed")
-                return "ISS ERR: obliczenie pozycji"
+                return L("iss_pos_err")
 
     @staticmethod
     def _compass(azimuth: float) -> str:
@@ -610,9 +675,8 @@ class ISSModule:
         now_local = now.astimezone(self.local_tz)
         selected = next((item for item in passes if item["los"] > now_local), None)
         if selected is None:
-            return (
-                f"ISS: brak przelotu >={threshold:.0f}deg "
-                f"w {self.config['prediction_hours']}h"
+            return L("iss_no_pass").format(
+                threshold=threshold, hours=self.config["prediction_hours"]
             )
 
         aos = selected["aos"]
@@ -621,8 +685,10 @@ class ISSModule:
         rise = self._compass(selected["aos_az"])
         setting = self._compass(selected["los_az"])
         max_el = round(selected["max_el"])
+        label = str(self.location.get("label", "")).strip()
+        label = f" {label}" if label else ""
         return (
-            f"ISS {aos:%d.%m} {aos:%H:%M}-{los:%H:%M} PL "
+            f"ISS {aos:%d.%m} {aos:%H:%M}-{los:%H:%M}{label} "
             f"max={max_el}deg {rise}>{setting} TCA={tca:%H:%M}"
             f"{self._age_suffix()}"
         )
@@ -635,7 +701,7 @@ class ISSModule:
         ):
             return self._pass_cache
         if not await self.refresh_if_needed():
-            return "ISS ERR: brak danych orbitalnych"
+            return L("iss_no_tle")
         async with self._calculation_lock:
             now = time.monotonic()
             if (
@@ -648,7 +714,7 @@ class ISSModule:
                 result = await asyncio.to_thread(self._next_pass)
             except Exception:
                 logger.exception("ISS pass calculation failed")
-                return "ISS ERR: obliczenie przelotu"
+                return L("iss_pass_err")
             self._pass_cache = result
             self._pass_cache_time = time.monotonic()
             return result
@@ -683,12 +749,17 @@ class MeshBot:
         )
         self.send_lock = asyncio.Lock()
         self.stop_event = asyncio.Event()
+        self.disconnected = asyncio.Event()
         self.tasks: list[asyncio.Task[Any]] = []
-        self.boot_time = time.time()
         self.own_name = ""
+        self.trigger_map = {
+            word.casefold(): category
+            for category, words in CONFIG["triggers"].items()
+            for word in words
+        }
 
     async def start(self) -> None:
-        logger.info("MeshCore Bot v6.0 starting")
+        logger.info("MeshCore Bot v6.1 starting")
         try:
             self.meshcore = await MeshCore.create_serial(
                 CONFIG["serial_port"],
@@ -699,10 +770,18 @@ class MeshBot:
             if self.meshcore is None:
                 raise RuntimeError("MeshCore connection failed")
 
-            self.own_name = str((self.meshcore.self_info or {}).get("adv_name", ""))
-            self.meshcore.subscribe(EventType.CHANNEL_MSG_RECV, self._on_message)
-            await self.meshcore.start_auto_message_fetching()
+            self_info = self.meshcore.self_info or {}
+            self.own_name = str(self_info.get("name") or self_info.get("adv_name") or "")
+            logger.info("Connected as %s", self.own_name or "?")
+            self.meshcore.subscribe(EventType.DISCONNECTED, self._on_disconnect)
             await self._configure_scope()
+            await self._discard_pending_messages()
+            self.meshcore.subscribe(
+                EventType.CHANNEL_MSG_RECV,
+                self._on_message,
+                attribute_filters={"channel_idx": int(CONFIG["channel"]["index"])},
+            )
+            await self.meshcore.start_auto_message_fetching()
 
             self.tasks = [
                 asyncio.create_task(self._message_worker(), name="message-worker"),
@@ -756,6 +835,28 @@ class MeshBot:
         except Exception:
             logger.exception("Default scope configuration failed")
 
+    async def _discard_pending_messages(self) -> None:
+        """Drop messages queued on the companion while the bot was offline.
+
+        Comparing sender timestamps with the boot time is unreliable, because
+        many nodes have no GPS or synced clock, so the backlog is drained
+        before the message handler is subscribed instead.
+        """
+        discarded = 0
+        for _ in range(500):
+            result = await self.meshcore.commands.get_msg(
+                timeout=float(CONFIG["command_timeout"])
+            )
+            if result.type in (EventType.NO_MORE_MSGS, EventType.ERROR):
+                break
+            discarded += 1
+        if discarded:
+            logger.info("Discarded %d queued message(s) from before startup", discarded)
+
+    async def _on_disconnect(self, event: Any) -> None:
+        logger.error("MeshCore disconnected: %s", event.payload)
+        self.disconnected.set()
+
     async def _shutdown(self) -> None:
         for task in self.tasks:
             task.cancel()
@@ -773,8 +874,18 @@ class MeshBot:
 
     async def _watchdog(self) -> None:
         while True:
-            await asyncio.sleep(float(CONFIG["keep_alive_interval"]))
-            if self.meshcore is None or not self.meshcore.is_connected:
+            try:
+                await asyncio.wait_for(
+                    self.disconnected.wait(),
+                    timeout=float(CONFIG["keep_alive_interval"]),
+                )
+            except asyncio.TimeoutError:
+                pass
+            if (
+                self.disconnected.is_set()
+                or self.meshcore is None
+                or not self.meshcore.is_connected
+            ):
                 raise RuntimeError("MeshCore disconnected")
             result = await asyncio.wait_for(
                 self.meshcore.commands.send_device_query(),
@@ -832,24 +943,22 @@ class MeshBot:
     def _match_trigger(self, text: str) -> Optional[str]:
         first_word = text.split(maxsplit=1)[0].casefold().lstrip("/")
         first_word = first_word.rstrip(".,?!:;")
-        for category, words in CONFIG["triggers"].items():
-            if first_word in {word.casefold() for word in words}:
-                return category
-        return None
+        return self.trigger_map.get(first_word)
+
+    @staticmethod
+    def _signal_info(msg: dict[str, Any]) -> str:
+        parts = []
+        path_len = msg.get("path_len")
+        if isinstance(path_len, int) and 0 <= path_len < 255:
+            parts.append(f"hops={path_len}")
+        snr = msg.get("SNR")
+        if isinstance(snr, (int, float)):
+            parts.append(f"SNR={snr:g}dB")
+        return " ".join(parts)
 
     async def _process_message(self, event: Any) -> None:
         msg = event.payload or {}
         if msg.get("channel_idx") != CONFIG["channel"]["index"]:
-            return
-
-        timestamp = msg.get("sender_timestamp") or msg.get("timestamp")
-        try:
-            timestamp = float(timestamp) if timestamp is not None else None
-            if timestamp is not None and timestamp > 10_000_000_000:
-                timestamp /= 1000.0
-        except (TypeError, ValueError):
-            timestamp = None
-        if timestamp is not None and timestamp < self.boot_time - 5.0:
             return
 
         sender, clean_text = self._parse_sender_and_text(str(msg.get("text", "")))
@@ -867,11 +976,11 @@ class MeshBot:
             return
 
         logger.info("Trigger %s from %s: %s", trigger, sender, clean_text)
-        reply = await self._build_reply(trigger, sender)
+        reply = await self._build_reply(trigger, sender, msg)
         if await self._send_reply(reply):
             self.logic.mark_replied(sender)
 
-    async def _build_reply(self, trigger: str, sender: str) -> str:
+    async def _build_reply(self, trigger: str, sender: str, msg: dict[str, Any]) -> str:
         if trigger == "weather_now":
             if not CONFIG["weather"]["enabled"]:
                 return "ACK WX disabled"
@@ -906,7 +1015,6 @@ class MeshBot:
                 return "ACK ISS disabled"
             return f"ACK {await self.iss.get_next_pass()}"
 
-
         if trigger == "info":
             return "ACK Repo: https://github.com/Arthua1/meshcore-bot"
 
@@ -914,7 +1022,9 @@ class MeshBot:
             return L("help_text")
 
         local_time = datetime.now(ZoneInfo(CONFIG["location"]["timezone"]))
-        return f"ACK - {sender} - {local_time:%H:%M}"
+        reply = f"ACK - {sender} - {local_time:%H:%M}"
+        signal_info = self._signal_info(msg) if CONFIG.get("show_signal") else ""
+        return f"{reply} - {signal_info}" if signal_info else reply
 
     async def _send_reply(self, text: str) -> bool:
         if self.meshcore is None or not self.meshcore.is_connected:
@@ -940,6 +1050,9 @@ class MeshBot:
 
 
 async def async_main() -> None:
+    config_path = load_config_file()
+    if config_path is not None:
+        logger.info("Loaded configuration from %s", config_path)
     bot = MeshBot()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

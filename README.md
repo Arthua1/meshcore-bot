@@ -15,15 +15,19 @@ The bot listens on a configurable MeshCore group channel and provides local weat
 - Solar indices and band conditions from HamQSL
 - Local ISS position and pass calculations using SGP4
 - Periodic TLE updates from CelesTrak with local fallback cache
+- Hop count and SNR of the received message in the `ping` reply
+- Short-term caching of HamQSL and Open-Meteo responses
+- Optional `config.json` override file, so local settings survive `git pull`
 - Message queue and serialized replies
 - Per-sender rate limiting and message deduplication
-- Serial connection watchdog
+- Serial connection watchdog with immediate exit on disconnect (for `systemd` restart)
+- Messages queued on the companion while the bot was offline are discarded at startup
 - Graceful shutdown on `SIGINT` and `SIGTERM`
 - Suitable for `systemd`, Proxmox USB passthrough, and persistent UDEV device links
 
 ## Commands
 
-- `test`, `ping` — reply with an ACK, sender name, and local time
+- `test`, `ping` — reply with an ACK, sender name, local time, hop count, and SNR
 - `pogoda`, `weather` — current local weather reading
 - `prognoza`, `weather_tomorrow` — next-day weather forecast
 - `solar`, `warunki`, `propa`, `dx` — solar indices and band conditions
@@ -35,7 +39,7 @@ The bot listens on a configurable MeshCore group channel and provides local weat
 Example replies:
 
 ```text
-ACK - SP4ABC - 18:42
+ACK - SP4ABC - 18:42 - hops=2 SNR=5.25dB
 ACK SFI=145 K=2 [Dzien] 80-40:P 20:G 15:G 10:F
 ACK ISS 48.2N 21.7E h=421km
 ACK ISS 21.07 18:32-18:39 PL max=42deg SW>NE TCA=18:35
@@ -54,10 +58,12 @@ The time range returned by `iss_przelot`, `iss_pass`, or `iss_lacznosc` is the p
 Python dependencies are pinned in `requirements.txt`:
 
 ```text
-meshcore==2.3.7
-skyfield==1.54
+meshcore==2.3.14
+skyfield==1.55
 sgp4==2.27
 ```
+
+`reverse_geocode` is optional. When installed, the `iss` reply includes the country below the station.
 
 ## Installation
 
@@ -87,7 +93,13 @@ venv/bin/python meshbot.py
 
 ## Configuration
 
-The main settings are stored in the `CONFIG` dictionary in `meshbot.py`.
+Default settings are stored in the `CONFIG` dictionary in `meshbot.py`.
+
+To keep local settings out of the repository, copy `config.example.json` to `config.json` (next to `meshbot.py`) and change only the values you need. The file is merged over the defaults, so nested sections may contain only some keys. A different path can be given in the `MESHBOT_CONFIG` environment variable. `config.json` is ignored by git, so `git pull` does not conflict with local changes.
+
+```bash
+cp config.example.json config.json
+```
 
 ### Serial port and channel
 
@@ -103,7 +115,7 @@ The main settings are stored in the `CONFIG` dictionary in `meshbot.py`.
 },
 ```
 
-`set_default_scope` configures the companion's default flood scope when supported by the installed MeshCore library and firmware. The group channel scope should also be configured in the MeshCore app or companion settings.
+`set_default_scope` sets the companion's flood scope for the bot session at startup (`set_flood_scope`), so the bot's replies are sent with the configured region scope. The group channel scope should also be configured in the MeshCore app or companion settings.
 
 Scoped channel messages have a smaller payload budget, so replies are limited by UTF-8 byte length rather than Python character count.
 
@@ -118,7 +130,15 @@ Scoped channel messages have a smaller payload budget, so replies are limited by
 },
 ```
 
-The location is used for weather forecasts, day/night propagation selection, and ISS pass predictions.
+The location is used for weather forecasts, day/night propagation selection, and ISS pass predictions. `label` is the short tag shown in the ISS pass reply; set it to an empty string to omit it.
+
+### Signal report
+
+```python
+"show_signal": True,
+```
+
+Adds the hop count and, when the companion firmware reports it, the SNR of the last hop to the `test`/`ping` reply.
 
 ### Language
 
