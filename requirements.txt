@@ -1,4 +1,4 @@
-meshcore==2.3.14
+meshcore==2.3.17
 skyfield==1.55
 sgp4==2.27
 # Optional: country name in the "iss" reply

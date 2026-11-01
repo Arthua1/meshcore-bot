@@ -58,7 +58,7 @@ The time range returned by `iss_przelot`, `iss_pass`, or `iss_lacznosc` is the p
 Python dependencies are pinned in `requirements.txt`:
 
 ```text
-meshcore==2.3.14
+meshcore==2.3.17
 skyfield==1.55
 sgp4==2.27
 ```
