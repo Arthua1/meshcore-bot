@@ -134,9 +134,6 @@ def load_config_file() -> Optional[Path]:
     return path
 
 
-GRP_TXT_PAYLOAD = 0x05
-RX_ROUTE_TTL = 300.0
-
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
@@ -753,7 +750,6 @@ class MeshBot:
         self.send_lock = asyncio.Lock()
         self.stop_event = asyncio.Event()
         self.disconnected = asyncio.Event()
-        self.rx_routes: dict[int, list[tuple[float, int, int, str]]] = {}
         self.tasks: list[asyncio.Task[Any]] = []
         self.own_name = ""
         self.trigger_map = {
@@ -779,7 +775,6 @@ class MeshBot:
             logger.info("Connected as %s", self.own_name or "?")
             self.meshcore.subscribe(EventType.DISCONNECTED, self._on_disconnect)
             await self._configure_scope()
-            await self._enable_route_tracking()
             await self._discard_pending_messages()
             self.meshcore.subscribe(
                 EventType.CHANNEL_MSG_RECV,
@@ -840,44 +835,6 @@ class MeshBot:
         except Exception:
             logger.exception("Default scope configuration failed")
 
-    async def _enable_route_tracking(self) -> None:
-        """Collect repeater routes of channel packets from the RX log.
-
-        The SNR reported with a channel message is only the last hop (the
-        repeater nearest to the bot), so it hardly changes. The route is
-        taken from the RX log instead; the library needs the channel key to
-        decrypt those packets so they can be matched with messages.
-        """
-        if not CONFIG.get("show_signal"):
-            return
-        enable = getattr(self.meshcore, "set_decrypt_channel_logs", None)
-        if enable is None:
-            logger.warning("Route tracking not supported by installed meshcore")
-            return
-        index = int(CONFIG["channel"]["index"])
-        try:
-            result = await asyncio.wait_for(
-                self.meshcore.commands.get_channel(index),
-                timeout=float(CONFIG["command_timeout"]),
-            )
-        except Exception:
-            logger.exception("Channel info request failed; route tracking disabled")
-            return
-        if result.type == EventType.ERROR:
-            logger.warning("Channel info failed: %s; route tracking disabled", result.payload)
-            return
-        enable(True)
-        self.meshcore.subscribe(
-            EventType.RX_LOG_DATA,
-            self._on_rx_log,
-            attribute_filters={"payload_type": GRP_TXT_PAYLOAD},
-        )
-        logger.info(
-            "Route tracking enabled for channel %s (%s)",
-            index,
-            result.payload.get("channel_name", "?"),
-        )
-
     async def _discard_pending_messages(self) -> None:
         """Drop messages queued on the companion while the bot was offline.
 
@@ -895,26 +852,6 @@ class MeshBot:
             discarded += 1
         if discarded:
             logger.info("Discarded %d queued message(s) from before startup", discarded)
-
-    async def _on_rx_log(self, event: Any) -> None:
-        data = event.payload or {}
-        msg_hash = data.get("msg_hash")
-        if msg_hash is None:
-            return
-        now = time.monotonic()
-        self.rx_routes = {
-            key: copies
-            for key, copies in self.rx_routes.items()
-            if now - copies[0][0] < RX_ROUTE_TTL
-        }
-        self.rx_routes.setdefault(msg_hash, []).append(
-            (
-                now,
-                int(data.get("path_len", -1)),
-                int(data.get("path_hash_size", 1)),
-                str(data.get("path", "")),
-            )
-        )
 
     async def _on_disconnect(self, event: Any) -> None:
         logger.error("MeshCore disconnected: %s", event.payload)
@@ -1008,35 +945,17 @@ class MeshBot:
         first_word = first_word.rstrip(".,?!:;")
         return self.trigger_map.get(first_word)
 
-    def _route(self, msg: dict[str, Any], hops: int) -> str:
-        timestamp = msg.get("sender_timestamp")
-        if not isinstance(timestamp, int):
-            return ""
-        text = str(msg.get("text", "")).encode("utf-8")
-        digest = hashlib.sha256(timestamp.to_bytes(4, "little") + text).digest()
-        copies = self.rx_routes.get(int.from_bytes(digest[:4], "little"), [])
-        # The radio may hear the same packet over several routes; the first
-        # copy with the delivered hop count is the one the companion kept.
-        for _, path_len, hash_size, path in copies:
-            width = hash_size * 2
-            if path_len == hops and len(path) == hops * width:
-                return ">".join(path[i:i + width] for i in range(0, len(path), width))
-        return ""
-
-    def _signal_info(self, msg: dict[str, Any]) -> str:
+    @staticmethod
+    def _signal_info(msg: dict[str, Any]) -> str:
         path_len = msg.get("path_len")
         if not isinstance(path_len, int) or not 0 <= path_len < 255:
             return ""
         parts = [f"hops={path_len}"]
-        if path_len == 0:
-            # Heard directly, so the SNR belongs to the sender's own radio.
-            snr = msg.get("SNR")
-            if isinstance(snr, (int, float)):
-                parts.append(f"SNR={snr:g}dB")
-        else:
-            route = self._route(msg, path_len)
-            if route:
-                parts.append(f"via {route}")
+        # For relayed messages the SNR is only the last hop (the repeater
+        # nearest to the bot); heard directly, it belongs to the sender.
+        snr = msg.get("SNR")
+        if path_len == 0 and isinstance(snr, (int, float)):
+            parts.append(f"SNR={snr:g}dB")
         return " ".join(parts)
 
     async def _process_message(self, event: Any) -> None:
