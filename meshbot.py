@@ -947,12 +947,14 @@ class MeshBot:
 
     @staticmethod
     def _signal_info(msg: dict[str, Any]) -> str:
-        parts = []
         path_len = msg.get("path_len")
-        if isinstance(path_len, int) and 0 <= path_len < 255:
-            parts.append(f"hops={path_len}")
+        if not isinstance(path_len, int) or not 0 <= path_len < 255:
+            return ""
+        parts = [f"hops={path_len}"]
+        # For relayed messages the SNR is only the last hop (the repeater
+        # nearest to the bot); heard directly, it belongs to the sender.
         snr = msg.get("SNR")
-        if isinstance(snr, (int, float)):
+        if path_len == 0 and isinstance(snr, (int, float)):
             parts.append(f"SNR={snr:g}dB")
         return " ".join(parts)
 

@@ -15,7 +15,7 @@ The bot listens on a configurable MeshCore group channel and provides local weat
 - Solar indices and band conditions from HamQSL
 - Local ISS position and pass calculations using SGP4
 - Periodic TLE updates from CelesTrak with local fallback cache
-- Hop count and SNR of the received message in the `ping` reply
+- Hop count of the received message in the `ping` reply
 - Short-term caching of HamQSL and Open-Meteo responses
 - Optional `config.json` override file, so local settings survive `git pull`
 - Message queue and serialized replies
@@ -27,7 +27,7 @@ The bot listens on a configurable MeshCore group channel and provides local weat
 
 ## Commands
 
-- `test`, `ping` — reply with an ACK, sender name, local time, hop count, and SNR
+- `test`, `ping` — reply with an ACK, sender name, local time, and hop count
 - `pogoda`, `weather` — current local weather reading
 - `prognoza`, `weather_tomorrow` — next-day weather forecast
 - `solar`, `warunki`, `propa`, `dx` — solar indices and band conditions
@@ -39,7 +39,8 @@ The bot listens on a configurable MeshCore group channel and provides local weat
 Example replies:
 
 ```text
-ACK - SP4ABC - 18:42 - hops=2 SNR=5.25dB
+ACK - SP4ABC - 18:42 - hops=2
+ACK - SP4XYZ - 18:43 - hops=0 SNR=9.5dB
 ACK SFI=145 K=2 [Dzien] 80-40:P 20:G 15:G 10:F
 ACK ISS 48.2N 21.7E h=421km
 ACK ISS 21.07 18:32-18:39 PL max=42deg SW>NE TCA=18:35
@@ -138,7 +139,7 @@ The location is used for weather forecasts, day/night propagation selection, and
 "show_signal": True,
 ```
 
-Adds the hop count and, when the companion firmware reports it, the SNR of the last hop to the `test`/`ping` reply.
+Adds the hop count to the `test`/`ping` reply. The SNR is added only for messages heard directly (`hops=0`): for messages relayed by repeaters the companion reports only the SNR of the last hop, which describes the link between the bot and its nearest repeater rather than the sender.
 
 ### Language
 
